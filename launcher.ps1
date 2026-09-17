@@ -1,5 +1,6 @@
 ﻿# OpenClaw 启动器 - 图形化中文界面（无需终端）
-# 功能：打开对话界面 / 停止服务 / 开机自启 / 状态显示
+# 功能：打开对话界面 / 停止服务 / 开机自启 / 状态显示 / 模型实时显示
+# by Doubao
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -39,13 +40,13 @@ $lblStatus.Size = New-Object System.Drawing.Size(420, 32)
 $lblStatus.Font = New-Object System.Drawing.Font("Microsoft YaHei UI", 12, [System.Drawing.FontStyle]::Bold)
 $lblStatus.Text = "正在检测..."
 
-# 模型信息
+# 模型信息（实时读取配置更新）
 $lblModel = New-Object System.Windows.Forms.Label
 $lblModel.Location = New-Object System.Drawing.Point(20, 58)
 $lblModel.Size = New-Object System.Drawing.Size(420, 20)
 $lblModel.Font = New-Object System.Drawing.Font("Microsoft YaHei UI", 9)
 $lblModel.ForeColor = [System.Drawing.Color]::DimGray
-$lblModel.Text = "模型: Nemotron 3 Ultra 550B（英伟达云端）"
+$lblModel.Text = "模型: 读取中..."
 
 # 提示
 $lblHint = New-Object System.Windows.Forms.Label
@@ -98,6 +99,45 @@ $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 function Update-AutoBtn {
   $exists = (Get-ItemProperty $runKey -Name "OpenClawGateway" -ErrorAction SilentlyContinue) -ne $null
   $btnAuto.Text = if ($exists) { "开机自启: 开" } else { "开机自启: 关" }
+}
+
+# 实时读取当前配置的模型并更新标签（跟随 openclaw.json 变化）
+function Update-ModelLabel {
+  try {
+    $cfgPath = Join-Path $env:USERPROFILE ".openclaw\openclaw.json"
+    if (-not (Test-Path $cfgPath)) { return }
+    $j = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $j.models -or -not $j.models.providers) { return }
+    $providers = $j.models.providers
+    $pickedName = $null
+    $src = ""
+    # 优先英伟达云端
+    if ($providers.PSObject.Properties.Name -contains "nvidia-nim") {
+      $p = $providers."nvidia-nim"
+      if ($p.models -and $p.models.Count -gt 0) {
+        $m = $p.models[0]
+        $pickedName = if ($m.name) { $m.name } else { $m.id }
+        $src = "英伟达云端"
+      }
+    }
+    # 否则取第一个可用 provider
+    if (-not $pickedName) {
+      foreach ($pn in $providers.PSObject.Properties.Name) {
+        $p = $providers.$pn
+        if ($p.models -and $p.models.Count -gt 0) {
+          $m = $p.models[0]
+          $pickedName = if ($m.name) { $m.name } else { $m.id }
+          $src = if ($pn -eq "api-proxy-other") { "本地 Ollama" } else { $pn }
+          break
+        }
+      }
+    }
+    if ($pickedName) {
+      $lblModel.Text = "模型: $pickedName" + $(if ($src) { "（$src）" } else { "" })
+    }
+  } catch {
+    # 读取失败保持原文本，不打断界面
+  }
 }
 
 $btnOpen.Add_Click({
@@ -161,7 +201,7 @@ $btnAuto.Add_Click({
   Update-AutoBtn
 })
 
-# 状态刷新
+# 状态与模型实时刷新（每 3 秒）
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 3000
 $timer.Add_Tick({
@@ -173,6 +213,7 @@ $timer.Add_Tick({
     $lblStatus.Text = "○ Gateway 未运行"
     $lblStatus.ForeColor = [System.Drawing.Color]::DimGray
   }
+  Update-ModelLabel
 })
 $timer.Start()
 
@@ -186,6 +227,7 @@ $form.Add_Shown({
     $lblStatus.ForeColor = [System.Drawing.Color]::DimGray
   }
   Update-AutoBtn
+  Update-ModelLabel
 })
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
